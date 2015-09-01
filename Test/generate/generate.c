@@ -64,7 +64,7 @@ const double c_max_amplitude = 2.0;
 #define n (16*1024)
 
 /** AWG data buffer */
-int32_t data[n];
+int32_t dataArray[n];
 
 /** Program name */
 const char *g_argv0 = NULL;
@@ -85,7 +85,7 @@ typedef struct {
 } awg_param_t;
 
 /* Forward declarations */
-void synthesize_signal(double ampl, double freq, signal_e type, double endfreq,
+void synthesize_signal(double ampl, double freq, signal_e type, double endfreq, double dutyCycle, int positive,
                        int32_t *data,
                        awg_param_t *params);
 void write_data_fpga(uint32_t ch,
@@ -98,13 +98,14 @@ void usage() {
     const char *format =
         "%s version %s-%s\n"
         "\n"
-        "Usage: %s   channel amplitude frequency <type> <end frequency>\n"
+        "Usage: %s   channel amplitude frequency <type> <end frequency | duty cycle>\n"
         "\n"
-        "\tchannel     Channel to generate signal on [1, 2].\n"
-        "\tamplitude   Peak-to-peak signal amplitude in Vpp [0.0 - %1.1f].\n"
-        "\tfrequency   Signal frequency in Hz [%2.1f - %2.1e].\n"
-        "\ttype        Signal type [sine, sqr, tri, sweep].\n"
-        "\tend frequency   Sweep-to frequency in Hz [%2.1f - %2.1e].\n"
+        "\tchannel\t\tChannel to generate signal on [1, 2].\n"
+        "\tamplitude\tPeak-to-peak signal amplitude in Vpp [0.0 - %1.1f].\n"
+        "\tfrequency\tSignal frequency in Hz [%2.1f - %2.1e].\n"
+        "\ttype\t\tSignal type [sine, sqr, sqrp, tri, sweep].\n"
+        "\tend frequency\tSweep-to frequency in Hz [%2.1f - %2.1e].\n"
+    	"\tduty cycle\tSquare Duty cycle in percentage [0 - 100%%]. Def. = 50%%.\n"
         "\n";
 
     fprintf( stderr, format, g_argv0, VERSION_STR, REVISION_STR,
@@ -142,10 +143,13 @@ int main(int argc, char *argv[])
     /* Signal frequency argument parsing */
     double freq = strtod(argv[3], NULL);
     double endfreq;
+    double duty = -1;
     endfreq = 0;
+    int pos = 0;
 
     if (argc > 5) {
         endfreq = strtod(argv[5], NULL);
+        duty = endfreq;
     }
 
     /* Signal type argument parsing */
@@ -155,6 +159,9 @@ int main(int argc, char *argv[])
             type = eSignalSine;
         } else if ( strcmp(argv[4], "sqr") == 0) {
             type = eSignalSquare;
+        } else if ( strcmp(argv[4], "sqrp") == 0) {
+            type = eSignalSquare;
+            pos = 1;
         } else if ( strcmp(argv[4], "tri") == 0) {
             type = eSignalTriangle;
         } else if ( strcmp(argv[4], "sweep") == 0) {
@@ -176,10 +183,10 @@ int main(int argc, char *argv[])
     awg_param_t params;
     /* Prepare data buffer (calculate from input arguments) */
     
-    synthesize_signal(ampl, freq, type, endfreq, data, &params);
+    synthesize_signal(ampl, freq, type, endfreq, duty, pos, dataArray, &params);
 
     /* Write the data to the FPGA and set FPGA AWG state machine */
-    write_data_fpga(ch, data, &params);
+    write_data_fpga(ch, dataArray, &params);
 }
 
 /**
@@ -196,7 +203,7 @@ int main(int argc, char *argv[])
  * @param awg   Returned AWG parameters.
  *
  */
-void synthesize_signal(double ampl, double freq, signal_e type, double endfreq,
+void synthesize_signal(double ampl, double freq, signal_e type, double endfreq, double dutyCycle, int positive,
                        int32_t *data,
                        awg_param_t *awg) {
 
@@ -206,7 +213,9 @@ void synthesize_signal(double ampl, double freq, signal_e type, double endfreq,
     const int dcoffs = -155;
     const int trans0 = 30;
     const int trans1 = 300;
+#if 0
     const double tt2 = 0.249;
+#endif
 
     /* This is where frequency is used... */
     awg->offsgain = (dcoffs << 16) + 0x1fff;
@@ -236,11 +245,44 @@ void synthesize_signal(double ampl, double freq, signal_e type, double endfreq,
         /* Square */
         if (type == eSignalSquare) {
             data[i] = round(amp * cos(2*M_PI*(double)i/(double)n));
-            if (data[i] > 0)
-                data[i] = amp;
-            else 
-                data[i] = -amp;
-
+            if(dutyCycle==-1)
+            {
+				if (data[i] > 0)
+				{
+					data[i] = amp;
+				}
+				else
+				{
+					if(positive)
+					{
+						data[i] = 0;
+					}
+					else
+					{
+						data[i] = -amp;
+					}
+				}
+            }
+            else
+            {
+            	int duty = (endfreq/100.0) * n;
+            	if(i <= duty )
+            	{
+            		data[i] = amp;
+            	}
+            	else
+            	{
+					if(positive)
+					{
+						data[i] = 0;
+					}
+					else
+					{
+						data[i] = -amp;
+					}
+            	}
+            }
+#if 0
             /* Soft linear transitions */
             double mm, qq, xx, xm;
             double x1, x2, y1, y2;    
@@ -277,6 +319,7 @@ void synthesize_signal(double ampl, double freq, signal_e type, double endfreq,
                 
                 data[i] = round(mm * xx + qq); 
             }
+#endif
         }
         
         /* Triangle */
